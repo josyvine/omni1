@@ -3,11 +3,11 @@ package com.vineyard.omnicam.app.core.utils
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Base64
 import androidx.browser.customtabs.CustomTabsIntent
 import com.vineyard.omnicam.app.core.constants.ApiEndpoints
 import java.security.MessageDigest
 import java.security.SecureRandom
-import android.util.Base64
 
 object DeepLinkHandler {
 
@@ -48,6 +48,8 @@ object DeepLinkHandler {
             .build()
 
         val customTabsIntent = CustomTabsIntent.Builder().build()
+        // Prevents AndroidRuntimeException when launched from ApplicationContext
+        customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         customTabsIntent.launchUrl(context, authUri)
     }
 
