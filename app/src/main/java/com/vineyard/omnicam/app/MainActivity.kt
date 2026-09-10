@@ -101,12 +101,13 @@ fun MainAppNavigation(appModule: AppModule) {
     val initialRoute = if (hasActiveSession) Screen.LiveDashboard.route else Screen.Landing.route
     val showBottomBar = currentRoute != null && currentRoute != Screen.Landing.route
 
-    // Instantiate ProcessScannedQrUseCase for guest scanning
+    // Instantiate ProcessScannedQrUseCase with AuthRepository wired for automatic Firestore sync
     val processScannedQrUseCase = remember {
         ProcessScannedQrUseCase(
             cryptoManager = appModule.cryptoManager,
             settingsRepository = appModule.settingsRepository,
-            firebaseModule = appModule.firebaseModule
+            firebaseModule = appModule.firebaseModule,
+            authRepository = appModule.authRepository
         )
     }
 
