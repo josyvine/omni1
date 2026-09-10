@@ -1,18 +1,23 @@
 package com.vineyard.omnicam.app.data.repository
 
 import android.content.Context
+import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.SetOptions
 import com.vineyard.omnicam.app.core.constants.CentralConfig
 import com.vineyard.omnicam.app.core.utils.DeepLinkHandler
+import com.vineyard.omnicam.app.core.utils.GoogleDriveAuthManager
 import com.vineyard.omnicam.app.data.models.ShareToken
 import com.vineyard.omnicam.app.data.models.UserProfile
 import com.vineyard.omnicam.app.di.FirebaseModule
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
@@ -24,8 +29,9 @@ import java.security.MessageDigest
  * 1. Signs into Developer Central Firebase via Google Auth (using developer Keystore SHA-1).
  * 2. Bridges silently into the User Admin's private Firebase using deterministic Email/Password
  *    auth (requiring zero SHA-1 setup for the user).
- * 3. Distinguishes roles ("admin" vs "guest") and syncs profile documents to Firestore.
- * 4. Handles Google Drive OAuth 2.0 PKCE token negotiation.
+ * 3. Distinguishes roles ("admin" vs "guest") and syncs profile documents to Firestore
+ *    using the local adminAuth UID to strictly align with Firestore rules: request.auth.uid == uid.
+ * 4. Handles Google Drive OAuth 2.0 PKCE token exchange and persistence via GoogleDriveAuthManager.
  * 5. Handles Guest sessions imported via encrypted QR codes.
  */
 class AuthRepository(
@@ -33,6 +39,10 @@ class AuthRepository(
     private val firebaseModule: FirebaseModule,
     private val settingsRepository: SettingsRepository
 ) {
+
+    private val tag = "AuthRepository"
+    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val driveAuthManager = GoogleDriveAuthManager(context)
 
     private val _currentUser = MutableStateFlow<UserProfile?>(null)
     val currentUser: StateFlow<UserProfile?> = _currentUser.asStateFlow()
@@ -51,6 +61,8 @@ class AuthRepository(
      * Restores an existing session on app launch.
      */
     private fun restoreSession() {
+        _isDriveConnected.value = driveAuthManager.isConnected()
+
         val guestToken = settingsRepository.getActiveGuestShareToken()
         if (!guestToken.isNullOrBlank()) {
             val tokenSnippet = if (guestToken.length >= 8) guestToken.substring(0, 8) else guestToken
@@ -116,6 +128,7 @@ class AuthRepository(
             _authError.value = null
             Result.success(profile)
         } catch (e: Exception) {
+            Log.e(tag, "Google Sign-In failed", e)
             _authError.value = e.localizedMessage ?: "Google Sign-In failed."
             Result.failure(e)
         }
@@ -134,23 +147,34 @@ class AuthRepository(
         role: String,
         displayName: String?
     ) {
-        val adminAuth = firebaseModule.adminAuth ?: return
+        val adminAuth = firebaseModule.adminAuth
+        if (adminAuth == null) {
+            Log.w(tag, "bridgeToAdminFirebase: secondary adminAuth is null. Skipping bridge.")
+            return
+        }
+
         val securePassword = calculateSecurePassword(email, googleUid)
 
         try {
             // Attempt to sign in first
             adminAuth.signInWithEmailAndPassword(email, securePassword).await()
-        } catch (_: Exception) {
-            // If user doesn't exist in the Admin's project yet, create them silently
+            Log.d(tag, "bridgeToAdminFirebase: Successfully authenticated existing admin user for $email")
+        } catch (signInEx: Exception) {
+            Log.i(tag, "bridgeToAdminFirebase: User does not exist yet (${signInEx.message}). Creating new user silently.")
             try {
                 adminAuth.createUserWithEmailAndPassword(email, securePassword).await()
-            } catch (_: Exception) {
-                // Ignore if collision occurs
+                Log.d(tag, "bridgeToAdminFirebase: Created new user for $email in admin project.")
+            } catch (createEx: Exception) {
+                Log.e(tag, "bridgeToAdminFirebase: Failed to create user in admin project", createEx)
             }
         }
 
         // Retrieve local Email/Password Auth UID
-        val localAdminUid = adminAuth.currentUser?.uid ?: return
+        val localAdminUid = adminAuth.currentUser?.uid
+        if (localAdminUid == null) {
+            Log.e(tag, "bridgeToAdminFirebase: localAdminUid is null after sign-in/create attempt. Cannot write Firestore profile.")
+            return
+        }
 
         // Sync User document to Admin's Firestore using localAdminUid
         try {
@@ -167,9 +191,12 @@ class AuthRepository(
                 adminFirestore.collection("users").document(localAdminUid)
                     .set(userMap, SetOptions.merge())
                     .await()
+                Log.d(tag, "bridgeToAdminFirebase: Successfully synced profile document to users/$localAdminUid")
+            } else {
+                Log.w(tag, "bridgeToAdminFirebase: adminFirestore is null. Skipping Firestore profile write.")
             }
-        } catch (_: Exception) {
-            // Non-fatal if Firestore rules enforce write boundaries
+        } catch (firestoreEx: Exception) {
+            Log.e(tag, "bridgeToAdminFirebase: Firestore write failed for UID $localAdminUid", firestoreEx)
         }
     }
 
@@ -208,19 +235,35 @@ class AuthRepository(
 
     /**
      * Handles the OAuth callback code returned by Chrome Custom Tab deep link.
+     * Asynchronously exchanges the code for real access and refresh tokens.
      */
     fun handleOAuthCode(code: String) {
-        // Exchange code for Google Drive access and refresh tokens
-        if (code.isNotBlank()) {
-            _isDriveConnected.value = true
-            _currentUser.value = _currentUser.value?.copy(driveConnected = true)
+        if (code.isBlank()) return
+
+        repositoryScope.launch {
+            val result = driveAuthManager.exchangeAuthorizationCode(
+                code = code,
+                clientId = CentralConfig.WEB_CLIENT_ID,
+                redirectUri = "omnicam://oauth2redirect"
+            )
+
+            if (result.isSuccess) {
+                Log.d(tag, "Google Drive PKCE token exchange succeeded")
+                _isDriveConnected.value = true
+                _currentUser.value = _currentUser.value?.copy(driveConnected = true)
+            } else {
+                val error = result.exceptionOrNull()?.localizedMessage ?: "Drive token exchange failed."
+                Log.e(tag, "Google Drive PKCE exchange failed: $error")
+                _authError.value = error
+            }
         }
     }
 
     /**
-     * Disconnects Google Drive integration.
+     * Disconnects Google Drive integration and clears stored PKCE tokens.
      */
     fun disconnectDrive() {
+        driveAuthManager.clearTokens()
         _isDriveConnected.value = false
         _currentUser.value = _currentUser.value?.copy(driveConnected = false)
     }
@@ -240,8 +283,11 @@ class AuthRepository(
             firebaseModule.centralAuth?.signOut()
             firebaseModule.adminAuth?.signOut()
             firebaseModule.clearCustomConfig()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(tag, "Error during Firebase sign out", e)
+        }
 
+        driveAuthManager.clearTokens()
         settingsRepository.saveActiveGuestShareToken("")
         _isDriveConnected.value = false
         _currentUser.value = null
