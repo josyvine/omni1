@@ -30,19 +30,29 @@
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.OmniCamVision"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+
+            <!-- Main App Launcher Filter -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Deep Link Intent Filter for Google OAuth 2.0 PKCE -->
+            <!-- Deep Link Intent Filter for Google Drive OAuth 2.0 PKCE Browser Redirect -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                
+                <!-- Matches com.vineyard.omnicam.app://oauth2redirect -->
                 <data
                     android:scheme="com.vineyard.omnicam.app"
+                    android:host="oauth2redirect" />
+
+                <!-- Fallback scheme matching omnicam://oauth2redirect -->
+                <data
+                    android:scheme="omnicam"
                     android:host="oauth2redirect" />
             </intent-filter>
         </activity>
