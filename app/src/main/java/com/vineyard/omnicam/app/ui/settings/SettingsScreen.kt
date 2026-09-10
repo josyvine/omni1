@@ -94,8 +94,9 @@ fun SettingsScreen(
     val customFirebaseJson by settingsRepository.customFirebaseJson.collectAsState(initial = null)
     val coroutineScope = rememberCoroutineScope()
 
-    val currentUser by (authRepository?.currentUser ?: remember { mutableStateOf(null) }).collectAsState(initial = null)
-    val isDriveConnected by (authRepository?.isDriveConnected ?: remember { mutableStateOf(false) }).collectAsState(initial = false)
+    // Safe, type-inferred state collection
+    val currentUser = authRepository?.currentUser?.collectAsState()?.value
+    val isDriveConnected = authRepository?.isDriveConnected?.collectAsState()?.value ?: false
 
     val userRole = UserRole.fromString(currentUser?.role)
     val isAdmin = userRole == UserRole.ADMIN
