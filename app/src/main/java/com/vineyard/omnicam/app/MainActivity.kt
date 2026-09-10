@@ -69,9 +69,13 @@ class MainActivity : ComponentActivity() {
      * or omnicam://oauth2redirect?code=AUTHORIZATION_CODE
      */
     private fun handleOAuthDeepLink(intent: Intent?) {
-        val data: Uri? = intent?.data ?: return
-        val isMatchingScheme = data.scheme == "com.vineyard.omnicam.app" || data.scheme == "omnicam"
-        val isMatchingHost = data.host == "oauth2redirect" || data.path?.contains("oauth2redirect") == true
+        val data: Uri = intent?.data ?: return
+        val scheme = data.scheme ?: ""
+        val host = data.host ?: ""
+        val path = data.path ?: ""
+
+        val isMatchingScheme = scheme == "com.vineyard.omnicam.app" || scheme == "omnicam"
+        val isMatchingHost = host == "oauth2redirect" || path.contains("oauth2redirect")
 
         if (isMatchingScheme && isMatchingHost) {
             val authCode = data.getQueryParameter("code")
