@@ -64,12 +64,16 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Intercepts Google OAuth 2.0 PKCE deep-link redirects:
+     * Intercepts Google OAuth 2.0 PKCE deep-link redirects returned by Chrome Custom Tab:
      * com.vineyard.omnicam.app://oauth2redirect?code=AUTHORIZATION_CODE
+     * or omnicam://oauth2redirect?code=AUTHORIZATION_CODE
      */
     private fun handleOAuthDeepLink(intent: Intent?) {
-        val data: Uri? = intent?.data
-        if (data != null && data.scheme == "com.vineyard.omnicam.app" && data.host == "oauth2redirect") {
+        val data: Uri? = intent?.data ?: return
+        val isMatchingScheme = data.scheme == "com.vineyard.omnicam.app" || data.scheme == "omnicam"
+        val isMatchingHost = data.host == "oauth2redirect" || data.path?.contains("oauth2redirect") == true
+
+        if (isMatchingScheme && isMatchingHost) {
             val authCode = data.getQueryParameter("code")
             if (!authCode.isNullOrBlank()) {
                 appModule.authRepository.handleOAuthCode(authCode)
@@ -170,7 +174,7 @@ fun MainAppNavigation(appModule: AppModule) {
                     LiveDashboardScreen(viewModel = liveVm)
                 }
 
-                // Google Drive Events & Cloud History Screen
+                // Google Drive Events & Cloud History Screen (Wired to AuthRepository for PKCE auth)
                 composable(Screen.DriveEvents.route) {
                     val driveVm: DriveEventsViewModel = viewModel {
                         DriveEventsViewModel(
@@ -178,7 +182,10 @@ fun MainAppNavigation(appModule: AppModule) {
                             appModule.cameraRepository
                         )
                     }
-                    DriveEventsScreen(viewModel = driveVm)
+                    DriveEventsScreen(
+                        viewModel = driveVm,
+                        authRepository = appModule.authRepository
+                    )
                 }
 
                 // Family & Guest Sharing Hub Screen
@@ -190,7 +197,7 @@ fun MainAppNavigation(appModule: AppModule) {
                     )
                 }
 
-                // Settings & System Control Screen (Properly wired to AuthRepository and navigation)
+                // Settings & System Control Screen (Wired to AuthRepository and navigation)
                 composable(Screen.Settings.route) {
                     SettingsScreen(
                         settingsRepository = appModule.settingsRepository,
