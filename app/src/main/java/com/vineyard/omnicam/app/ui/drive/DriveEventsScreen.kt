@@ -47,7 +47,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,8 +81,9 @@ fun DriveEventsScreen(
     val storageUsed by viewModel.storageUsedBytes.collectAsState()
     val activePlayerEvent by viewModel.activePlayerEvent.collectAsState()
 
-    val isDriveConnected by (authRepository?.isDriveConnected ?: remember { mutableStateOf(false) }).collectAsState(initial = false)
-    val currentUser by (authRepository?.currentUser ?: remember { mutableStateOf(null) }).collectAsState(initial = null)
+    // Safe, type-inferred state collection
+    val isDriveConnected = authRepository?.isDriveConnected?.collectAsState()?.value ?: false
+    val currentUser = authRepository?.currentUser?.collectAsState()?.value
 
     val userRole = UserRole.fromString(currentUser?.role)
     val isAdmin = userRole == UserRole.ADMIN
@@ -182,12 +182,14 @@ fun DriveEventsScreen(
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+                            val email = currentUser?.email
+                            val statusSubtitle = if (isDriveConnected) {
+                                if (!email.isNullOrBlank()) email else "15 GB Free Tier Active"
+                            } else {
+                                "Connect your 15 GB account for free off-site backup"
+                            }
                             Text(
-                                text = if (isDriveConnected) {
-                                    currentUser?.email?.ifBlank { "Cloud Backup Enabled" } ?: "15 GB Free Tier Active"
-                                } else {
-                                    "Connect your 15 GB account for free off-site backup"
-                                },
+                                text = statusSubtitle,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isDriveConnected) EmeraldLive else MaterialTheme.colorScheme.onSurfaceVariant
                             )
