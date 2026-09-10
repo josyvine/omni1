@@ -148,7 +148,14 @@ fun LandingScreen(
                 if (onGuestQrScanned != null) {
                     onGuestQrScanned(rawPayload)
                 }
-                googleSignInLauncher.launch(googleSignInClient.signInIntent)
+
+                if (currentUser != null) {
+                    // Member was already signed in with Google; proceed directly to dashboard
+                    onNavigateToDashboard()
+                } else {
+                    // Member needs Google identity verification
+                    googleSignInLauncher.launch(googleSignInClient.signInIntent)
+                }
             }
         )
     }
@@ -262,13 +269,13 @@ fun LandingScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Action Card 2: Sign In with Google (Identity Verification)
+        // Action Card 2: Sign In with Google (Direct Google OAuth)
         val isUserLoggedIn = currentUser != null
         val googleSubtitle = if (isUserLoggedIn) {
             val userRoleLabel = if (currentUser?.role == "guest") "House Member" else "House Admin"
             "Signed in as: ${currentUser?.email} ($userRoleLabel). Identity verified."
         } else {
-            "Sign in with Google account to verify identity on Central Developer Firebase."
+            "Sign in with your Google account to verify identity via Google OAuth."
         }
         ActionCard(
             title = if (isUserLoggedIn) "Google Account Connected" else "Sign in with Google",
@@ -285,7 +292,7 @@ fun LandingScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Action Card 3: Join as Guest (Scan QR Code)
+        // Action Card 3: Join as House Member (Scan QR Code)
         val isMemberJoined = isGuestQrImported || currentUser?.role == "guest"
         val guestSubtitle = if (isMemberJoined && configuredProjectId != null) {
             "Joined Host Project: $configuredProjectId as House Member. QR configuration verified."
@@ -293,7 +300,7 @@ fun LandingScreen(
             "Scan an Admin's encrypted QR code to import configuration, then verify with Google."
         }
         ActionCard(
-            title = if (isMemberJoined) "House Network Joined (Member Mode)" else "Join as Guest (Scan QR Code)",
+            title = if (isMemberJoined) "House Network Joined (Member Mode)" else "Join as House Member (Scan QR Code)",
             subtitle = guestSubtitle,
             icon = if (isMemberJoined) Icons.Default.CheckCircle else Icons.Default.QrCodeScanner,
             accentColor = if (isMemberJoined) EmeraldLive else IndigoAccent,
@@ -313,7 +320,7 @@ fun LandingScreen(
         }
         val byoSubtitle = when {
             isAdminConfigured -> "Project: $configuredProjectId active. Bundled in member QR codes."
-            isMemberJoined -> "Linked to Host Project: $configuredProjectId. Storage managed by Admin."
+            isMemberJoined -> "Linked to Host Project: $configuredProjectId. Database managed by Admin."
             else -> "Supply your own google-services.json for dedicated private cloud storage."
         }
         ActionCard(
