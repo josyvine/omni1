@@ -22,7 +22,8 @@ import javax.inject.Inject
  * 3. Permitted camera IDs list.
  * 4. Permission level ("VIEW_ONLY" or "FULL_CONTROL_PTZ").
  * 5. Expiration timestamp.
- * 6. Minified Admin Firebase credentials (projectId, apiKey, appId, storageBucket).
+ * 6. Minified House Admin Firebase credentials (projectId, apiKey, appId, storageBucket)
+ *    so family members automatically link to the House Admin's private Firestore database.
  */
 class GenerateShareQrUseCase @Inject constructor(
     private val cryptoManager: CryptoManager,
@@ -99,9 +100,22 @@ class GenerateShareQrUseCase @Inject constructor(
                 val projectId = projectInfo.getString("project_id")
                 val storageBucket = projectInfo.optString("storage_bucket", "")
                 val clientArray = root.getJSONArray("client")
-                val firstClient = clientArray.getJSONObject(0)
-                val apiKey = firstClient.getJSONArray("api_key").getJSONObject(0).getString("current_key")
-                val appId = firstClient.getJSONObject("client_info").getString("mobilesdk_app_id")
+                
+                // Select matching package client if present, otherwise fallback to first client
+                var selectedClient = clientArray.getJSONObject(0)
+                for (i in 0 until clientArray.length()) {
+                    val clientObj = clientArray.getJSONObject(i)
+                    val pkgName = clientObj.optJSONObject("client_info")
+                        ?.optJSONObject("android_client_info")
+                        ?.optString("package_name")
+                    if (pkgName == "com.vineyard.omnicam.app") {
+                        selectedClient = clientObj
+                        break
+                    }
+                }
+
+                val apiKey = selectedClient.getJSONArray("api_key").getJSONObject(0).getString("current_key")
+                val appId = selectedClient.getJSONObject("client_info").getString("mobilesdk_app_id")
 
                 JSONObject().apply {
                     put("p", projectId)
@@ -122,7 +136,7 @@ class GenerateShareQrUseCase @Inject constructor(
     }
 
     /**
-     * Decrypts and parses an incoming encrypted payload.
+     * Decrypts and parses an incoming encrypted payload into a ShareToken.
      */
     fun decodeEncryptedPayload(encryptedText: String): ShareToken? {
         return try {
@@ -145,6 +159,20 @@ class GenerateShareQrUseCase @Inject constructor(
                 expiresAt = json.optLong("exp", 0L),
                 createdAt = json.optLong("createdAt", System.currentTimeMillis())
             )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Extracts bundled House Admin Firebase credentials from the encrypted QR payload.
+     * Returns a minified JSONObject with keys "p" (projectId), "k" (apiKey), "a" (appId), "b" (bucket).
+     */
+    fun extractFirebaseConfigFromPayload(encryptedText: String): JSONObject? {
+        return try {
+            val decrypted = cryptoManager.decrypt(encryptedText)
+            val json = JSONObject(decrypted)
+            json.optJSONObject("fbConfig")
         } catch (_: Exception) {
             null
         }
