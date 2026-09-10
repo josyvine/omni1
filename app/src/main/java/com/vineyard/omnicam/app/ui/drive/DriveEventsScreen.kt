@@ -23,11 +23,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAlert
+import androidx.compose.material.icons.filled.AddLink
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -35,10 +42,12 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,7 +61,10 @@ import com.vineyard.omnicam.app.core.theme.AmberWarning
 import com.vineyard.omnicam.app.core.theme.CyanAccent
 import com.vineyard.omnicam.app.core.theme.EmeraldLive
 import com.vineyard.omnicam.app.core.theme.IndigoAccent
+import com.vineyard.omnicam.app.core.theme.RoseAlert
 import com.vineyard.omnicam.app.data.models.DriveEvent
+import com.vineyard.omnicam.app.data.models.UserRole
+import com.vineyard.omnicam.app.data.repository.AuthRepository
 import com.vineyard.omnicam.app.ui.components.StorageProgressBar
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -61,6 +73,7 @@ import java.util.Locale
 @Composable
 fun DriveEventsScreen(
     viewModel: DriveEventsViewModel,
+    authRepository: AuthRepository? = null,
     modifier: Modifier = Modifier
 ) {
     val events by viewModel.filteredEvents.collectAsState()
@@ -68,6 +81,12 @@ fun DriveEventsScreen(
     val selectedCameraId by viewModel.selectedCameraId.collectAsState()
     val storageUsed by viewModel.storageUsedBytes.collectAsState()
     val activePlayerEvent by viewModel.activePlayerEvent.collectAsState()
+
+    val isDriveConnected by (authRepository?.isDriveConnected ?: remember { mutableStateOf(false) }).collectAsState(initial = false)
+    val currentUser by (authRepository?.currentUser ?: remember { mutableStateOf(null) }).collectAsState(initial = null)
+
+    val userRole = UserRole.fromString(currentUser?.role)
+    val isAdmin = userRole == UserRole.ADMIN
 
     activePlayerEvent?.let { event ->
         DriveVideoPlayerDialog(
@@ -116,6 +135,116 @@ fun DriveEventsScreen(
                 )
             }
         }
+
+        // GOOGLE DRIVE CONNECTION STATUS CARD
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .border(
+                    1.dp,
+                    if (isDriveConnected) EmeraldLive.copy(alpha = 0.4f) else CyanAccent.copy(alpha = 0.3f),
+                    RoundedCornerShape(16.dp)
+                )
+                .testTag("card_drive_auth_status"),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(if (isDriveConnected) EmeraldLive.copy(alpha = 0.15f) else CyanAccent.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isDriveConnected) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                                contentDescription = null,
+                                tint = if (isDriveConnected) EmeraldLive else CyanAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Column {
+                            Text(
+                                text = if (isDriveConnected) "Google Drive Active" else "Google Drive Disconnected",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isDriveConnected) {
+                                    currentUser?.email?.ifBlank { "Cloud Backup Enabled" } ?: "15 GB Free Tier Active"
+                                } else {
+                                    "Connect your 15 GB account for free off-site backup"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isDriveConnected) EmeraldLive else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (isDriveConnected) {
+                        OutlinedButton(
+                            onClick = { authRepository?.disconnectDrive() },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseAlert),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RoseAlert),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Icon(Icons.Default.LinkOff, contentDescription = null, tint = RoseAlert, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Disconnect", color = RoseAlert, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+
+                if (!isDriveConnected) {
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = if (isAdmin) {
+                            "As House Admin, camera motion recordings upload directly to your Google Drive under the /OmniCam folder."
+                        } else {
+                            "You are logged in as a House Member. Connect your Google account to enable personal backup copies."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = { authRepository?.initiateGoogleDriveOAuth() },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.AddLink, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Connect Google Drive (15 GB Free)",
+                            color = Color.Black,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Google Drive Storage Meter
         StorageProgressBar(
