@@ -139,6 +139,9 @@ fun VlcVideoPlayerSurface(
 
     DisposableEffect(camera.id) {
         onDispose {
+            // Immediately stop RTSP TCP socket and release hardware decoders
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
             exoPlayer.release()
         }
     }
@@ -160,11 +163,16 @@ fun VlcVideoPlayerSurface(
                     PlayerView(ctx).apply {
                         player = exoPlayer
                         useController = false
+                        // Use TextureView to prevent hardware surface punch-through and ghosting on tab changes
+                        surfaceType = PlayerView.SURFACE_TYPE_TEXTURE_VIEW
                         layoutParams = FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
                     }
+                },
+                onRelease = { playerView ->
+                    playerView.player = null
                 },
                 modifier = Modifier.fillMaxSize()
             )
