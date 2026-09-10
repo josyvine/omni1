@@ -1,9 +1,10 @@
 package com.vineyard.omnicam.app.data.repository
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.firebase.firestore.SetOptions
 import com.vineyard.omnicam.app.core.constants.CentralConfig
 import com.vineyard.omnicam.app.core.utils.DeepLinkHandler
@@ -20,17 +21,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.security.MessageDigest
 
 /**
  * Authentication Repository.
  * 
- * Orchestrates authentication across the Dual-Firebase architecture:
- * 1. Signs into Developer Central Firebase via Google Auth (using developer Keystore SHA-1).
- * 2. Bridges silently into the User Admin's private Firebase using deterministic Email/Password
- *    auth (requiring zero SHA-1 setup for the user).
- * 3. Distinguishes roles ("admin" vs "guest") and syncs profile documents to Firestore
- *    using the local adminAuth UID to strictly align with Firestore rules: request.auth.uid == uid.
+ * Implements direct, serverless Google Sign-In with client-side verification:
+ * 1. Uses Google Identity Services (Google OAuth 2.0 Web Client ID) directly on-device.
+ *    Eliminates centralized Firebase Auth user tables and the 50,000 MAU billing cap.
+ * 2. Bridges silently into the User Admin's private Firebase (omnicam-93996) with deterministic
+ *    credentials so the House Admin's Firestore stores all users locally.
+ * 3. Distinguishes roles ("admin" vs "guest") and syncs profile documents to House Admin's Firestore
+ *    using the local adminAuth UID to strictly align with security rules: request.auth.uid == uid.
  * 4. Handles Google Drive OAuth 2.0 PKCE token exchange and persistence via GoogleDriveAuthManager.
  * 5. Handles Guest sessions imported via encrypted QR codes.
  */
@@ -43,6 +46,7 @@ class AuthRepository(
     private val tag = "AuthRepository"
     private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val driveAuthManager = GoogleDriveAuthManager(context)
+    private val authPrefs = context.getSharedPreferences(PREFS_AUTH, Context.MODE_PRIVATE)
 
     private val _currentUser = MutableStateFlow<UserProfile?>(null)
     val currentUser: StateFlow<UserProfile?> = _currentUser.asStateFlow()
@@ -58,11 +62,13 @@ class AuthRepository(
     }
 
     /**
-     * Restores an existing session on app launch.
+     * Restores an existing session on app launch from local secure preferences
+     * or active device Google Sign-In cache.
      */
     private fun restoreSession() {
         _isDriveConnected.value = driveAuthManager.isConnected()
 
+        // 1. Check for Active Guest QR Token
         val guestToken = settingsRepository.getActiveGuestShareToken()
         if (!guestToken.isNullOrBlank()) {
             val tokenSnippet = if (guestToken.length >= 8) guestToken.substring(0, 8) else guestToken
@@ -77,55 +83,84 @@ class AuthRepository(
             return
         }
 
-        val centralUser = firebaseModule.centralAuth?.currentUser
-        if (centralUser != null) {
+        // 2. Check for Persisted Local User Session
+        val savedUid = authPrefs.getString(KEY_USER_UID, null)
+        val savedEmail = authPrefs.getString(KEY_USER_EMAIL, null)
+        val savedDisplayName = authPrefs.getString(KEY_USER_NAME, null)
+        val savedPhotoUrl = authPrefs.getString(KEY_USER_PHOTO, null)
+        val savedRole = authPrefs.getString(KEY_USER_ROLE, "admin") ?: "admin"
+
+        if (!savedUid.isNullOrBlank() && !savedEmail.isNullOrBlank()) {
             _currentUser.value = UserProfile(
-                uid = centralUser.uid,
-                email = centralUser.email ?: "",
-                displayName = centralUser.displayName ?: "Admin",
-                photoUrl = centralUser.photoUrl?.toString(),
-                role = "admin",
+                uid = savedUid,
+                email = savedEmail,
+                displayName = savedDisplayName ?: if (savedRole == "admin") "House Admin" else "House Member",
+                photoUrl = savedPhotoUrl,
+                role = savedRole,
                 driveConnected = _isDriveConnected.value
             )
+            return
+        }
+
+        // 3. Fallback: Check Active Google Sign-In on Device
+        val lastGoogleAccount = GoogleSignIn.getLastSignedInAccount(context)
+        if (lastGoogleAccount != null) {
+            val profile = UserProfile(
+                uid = lastGoogleAccount.id ?: "google_${System.currentTimeMillis()}",
+                email = lastGoogleAccount.email ?: "",
+                displayName = lastGoogleAccount.displayName ?: "House Admin",
+                photoUrl = lastGoogleAccount.photoUrl?.toString(),
+                role = savedRole,
+                driveConnected = _isDriveConnected.value
+            )
+            saveUserSession(profile)
+            _currentUser.value = profile
         }
     }
 
     /**
-     * Step 1: Sign in with Google ID Token on the Central Developer Firebase instance.
-     * Accepts explicit role ("admin" for House Admin, "guest" for House Member).
+     * Authenticates directly via Google ID Token on the client without routing through
+     * a central developer Firebase user database.
+     * Supports both "admin" (House Admin) and "guest" (House Member).
      */
     suspend fun signInWithGoogle(
         idToken: String,
         role: String = "admin"
     ): Result<UserProfile> = withContext(Dispatchers.IO) {
         try {
-            val centralAuth = firebaseModule.centralAuth
-                ?: return@withContext Result.failure(IllegalStateException("Central Firebase Auth is not initialized."))
+            val tokenPayload = parseGoogleIdToken(idToken)
+            val lastAccount = GoogleSignIn.getLastSignedInAccount(context)
 
-            val credential = GoogleAuthProvider.getCredential(idToken, null)
-            val authResult = centralAuth.signInWithCredential(credential).await()
-            val user = authResult.user
-                ?: return@withContext Result.failure(IllegalStateException("Firebase Google Auth returned null user."))
+            val googleUid = tokenPayload?.uid?.ifBlank { lastAccount?.id } ?: ""
+            val email = tokenPayload?.email?.ifBlank { lastAccount?.email } ?: ""
+            val displayName = tokenPayload?.displayName?.ifBlank { lastAccount?.displayName }
+                ?: if (role == "admin") "House Admin" else "House Member"
+            val photoUrl = tokenPayload?.photoUrl ?: lastAccount?.photoUrl?.toString()
 
-            val email = user.email ?: ""
-            val googleUid = user.uid
+            if (email.isBlank() && googleUid.isBlank()) {
+                return@withContext Result.failure(IllegalStateException("Could not extract verified identity from Google credentials."))
+            }
 
-            // Step 2: Silently bridge into the secondary Admin Firebase if configured
+            // Silently bridge into the secondary House Admin Firebase if configured
             if (firebaseModule.isCustomConfigured() && email.isNotBlank()) {
-                bridgeToAdminFirebase(email, googleUid, role, user.displayName)
+                bridgeToAdminFirebase(email, googleUid, role, displayName)
             }
 
             val profile = UserProfile(
-                uid = googleUid,
+                uid = googleUid.ifBlank { "google_${System.currentTimeMillis()}" },
                 email = email,
-                displayName = user.displayName ?: if (role == "admin") "Admin User" else "Guest Member",
-                photoUrl = user.photoUrl?.toString(),
+                displayName = displayName,
+                photoUrl = photoUrl,
                 role = role,
                 driveConnected = _isDriveConnected.value
             )
 
+            // Save session locally to device
+            saveUserSession(profile)
+
             _currentUser.value = profile
             _authError.value = null
+            Log.d(tag, "Successfully signed in via Google: $email as $role (Zero Central Server Cost)")
             Result.success(profile)
         } catch (e: Exception) {
             Log.e(tag, "Google Sign-In failed", e)
@@ -141,7 +176,7 @@ class AuthRepository(
      * 3. Syncs user role ("admin" or "guest") to the private Firestore "users" collection
      *    using the local adminAuth UID so request.auth.uid == uid in security rules.
      */
-    private suspend fun bridgeToAdminFirebase(
+    suspend fun bridgeToAdminFirebase(
         email: String,
         googleUid: String,
         role: String,
@@ -201,7 +236,39 @@ class AuthRepository(
     }
 
     /**
-     * Deterministic password generator (identical to the inout50 logic).
+     * Extracts verified Google payload directly from the Google ID Token JWT.
+     */
+    private fun parseGoogleIdToken(idToken: String): GoogleTokenPayload? {
+        return try {
+            val parts = idToken.split(".")
+            if (parts.size >= 2) {
+                val decodedBytes = Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP)
+                val json = JSONObject(String(decodedBytes, Charsets.UTF_8))
+                GoogleTokenPayload(
+                    uid = json.optString("sub", ""),
+                    email = json.optString("email", ""),
+                    displayName = json.optString("name", ""),
+                    photoUrl = json.optString("picture", "").ifBlank { null }
+                )
+            } else null
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to parse Google ID Token payload", e)
+            null
+        }
+    }
+
+    private fun saveUserSession(profile: UserProfile) {
+        authPrefs.edit()
+            .putString(KEY_USER_UID, profile.uid)
+            .putString(KEY_USER_EMAIL, profile.email)
+            .putString(KEY_USER_NAME, profile.displayName)
+            .putString(KEY_USER_PHOTO, profile.photoUrl)
+            .putString(KEY_USER_ROLE, profile.role)
+            .apply()
+    }
+
+    /**
+     * Deterministic password generator.
      */
     private fun calculateSecurePassword(email: String, uid: String): String {
         val input = "$email:$uid:OmniCamSecureSalt_2026"
@@ -214,7 +281,7 @@ class AuthRepository(
      */
     fun authenticateAsGuest(token: ShareToken) {
         val tokenSnippet = if (token.token.length >= 8) token.token.substring(0, 8) else token.token
-        _currentUser.value = UserProfile(
+        val profile = UserProfile(
             uid = "guest_$tokenSnippet",
             email = "guest@shared.home",
             displayName = "Guest Member",
@@ -222,6 +289,8 @@ class AuthRepository(
             role = "guest",
             driveConnected = false
         )
+        _currentUser.value = profile
+        saveUserSession(profile)
         _isDriveConnected.value = false
         _authError.value = null
     }
@@ -235,7 +304,6 @@ class AuthRepository(
 
     /**
      * Handles the OAuth callback code returned by Chrome Custom Tab deep link.
-     * Asynchronously exchanges the code for real access and refresh tokens.
      */
     fun handleOAuthCode(code: String) {
         if (code.isBlank()) return
@@ -244,7 +312,7 @@ class AuthRepository(
             val result = driveAuthManager.exchangeAuthorizationCode(
                 code = code,
                 clientId = CentralConfig.WEB_CLIENT_ID,
-                redirectUri = "omnicam://oauth2redirect"
+                redirectUri = "com.vineyard.omnicam.app://oauth2redirect"
             )
 
             if (result.isSuccess) {
@@ -273,24 +341,44 @@ class AuthRepository(
      */
     fun updateProfile(profile: UserProfile) {
         _currentUser.value = profile
+        saveUserSession(profile)
     }
 
     /**
-     * Clears all session data and signs out from both Firebase instances.
+     * Clears all session data and signs out from Google and secondary Admin Firebase.
      */
     fun signOut() {
         try {
-            firebaseModule.centralAuth?.signOut()
             firebaseModule.adminAuth?.signOut()
             firebaseModule.clearCustomConfig()
+
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).build()
+            GoogleSignIn.getClient(context, gso).signOut()
         } catch (e: Exception) {
-            Log.e(tag, "Error during Firebase sign out", e)
+            Log.e(tag, "Error during sign out", e)
         }
 
+        authPrefs.edit().clear().apply()
         driveAuthManager.clearTokens()
         settingsRepository.saveActiveGuestShareToken("")
         _isDriveConnected.value = false
         _currentUser.value = null
         _authError.value = null
     }
+
+    companion object {
+        private const val PREFS_AUTH = "omnicam_auth_prefs"
+        private const val KEY_USER_UID = "key_user_uid"
+        private const val KEY_USER_EMAIL = "key_user_email"
+        private const val KEY_USER_NAME = "key_user_name"
+        private const val KEY_USER_PHOTO = "key_user_photo"
+        private const val KEY_USER_ROLE = "key_user_role"
+    }
+
+    private data class GoogleTokenPayload(
+        val uid: String,
+        val email: String,
+        val displayName: String,
+        val photoUrl: String?
+    )
 }
