@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.vineyard.omnicam.app.data.models.UserProfile
 import com.vineyard.omnicam.app.data.repository.AuthRepository
 import com.vineyard.omnicam.app.data.repository.SettingsRepository
+import com.vineyard.omnicam.app.di.ConfigSource
 import com.vineyard.omnicam.app.di.FirebaseModule
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,8 +35,15 @@ class LandingViewModel(
     val currentUser: StateFlow<UserProfile?> = authRepository.currentUser
 
     /**
-     * Observable Project ID extracted dynamically from custom google-services.json.
-     * Emits null when no custom JSON is configured.
+     * Identifies if the active configuration source was established via QR code.
+     */
+    val isGuestMode: Boolean
+        get() = firebaseModule.configSource == ConfigSource.GUEST_QR
+
+    /**
+     * Observable Project ID extracted dynamically from custom google-services.json
+     * or resolved directly from the active FirebaseModule instance.
+     * Emits null when no custom project is configured.
      */
     val configuredProjectId: StateFlow<String?> = settingsRepository.customFirebaseJson
         .map { json ->
@@ -53,13 +61,13 @@ class LandingViewModel(
                     "Active"
                 }
             } else {
-                null
+                firebaseModule.getActiveProjectId()
             }
         }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = null
+            initialValue = firebaseModule.getActiveProjectId()
         )
 
     fun openByoDialog() {
@@ -85,15 +93,24 @@ class LandingViewModel(
     /**
      * Signs in with Google ID token on Central Developer Firebase
      * and silently bridges into the User Admin's private Firebase with Email/Password.
+     * 
+     * Explicitly accepts role ("admin" vs "guest") so members joining via QR code
+     * are never elevated to House Admin privileges.
      */
-    fun signInWithGoogle(idToken: String, onResult: (Boolean) -> Unit = {}) {
+    fun signInWithGoogle(
+        idToken: String,
+        role: String = "admin",
+        onResult: (Boolean) -> Unit = {}
+    ) {
         viewModelScope.launch {
             _isLoading.value = true
-            val result = authRepository.signInWithGoogle(idToken)
+            val result = authRepository.signInWithGoogle(idToken = idToken, role = role)
             _isLoading.value = false
 
             if (result.isSuccess) {
-                _statusMessage.value = "Signed in as ${result.getOrNull()?.email}"
+                val profile = result.getOrNull()
+                val roleLabel = if (profile?.role == "guest") "House Member" else "House Admin"
+                _statusMessage.value = "Signed in as ${profile?.email} ($roleLabel)"
             } else {
                 _statusMessage.value = result.exceptionOrNull()?.localizedMessage ?: "Google Sign-In failed."
             }
@@ -102,13 +119,14 @@ class LandingViewModel(
     }
 
     /**
-     * Saves the custom Firebase configuration and dynamically mounts the "admin_cam_app" instance.
+     * Saves the custom Firebase configuration and dynamically mounts the "admin_cam_app" instance
+     * with an explicit ADMIN_JSON origin tag.
      */
     fun saveByoFirebase(json: String, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             _isLoading.value = true
             settingsRepository.saveCustomFirebaseJson(json)
-            val success = firebaseModule.initializeByoFirebase(json)
+            val success = firebaseModule.initializeCustomFirebase(json, ConfigSource.ADMIN_JSON)
             _isLoading.value = false
 
             if (success) {
