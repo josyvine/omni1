@@ -163,8 +163,6 @@ fun VlcVideoPlayerSurface(
                     PlayerView(ctx).apply {
                         player = exoPlayer
                         useController = false
-                        // Use TextureView to prevent hardware surface punch-through and ghosting on tab changes
-                        surfaceType = PlayerView.SURFACE_TYPE_TEXTURE_VIEW
                         layoutParams = FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
