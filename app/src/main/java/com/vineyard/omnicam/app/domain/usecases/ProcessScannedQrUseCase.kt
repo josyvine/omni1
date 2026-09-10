@@ -1,8 +1,11 @@
 package com.vineyard.omnicam.app.domain.usecases
 
+import android.util.Log
 import com.vineyard.omnicam.app.core.security.CryptoManager
 import com.vineyard.omnicam.app.data.models.ShareToken
+import com.vineyard.omnicam.app.data.repository.AuthRepository
 import com.vineyard.omnicam.app.data.repository.SettingsRepository
+import com.vineyard.omnicam.app.di.ConfigSource
 import com.vineyard.omnicam.app.di.FirebaseModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,18 +19,22 @@ import javax.inject.Inject
  * Flow:
  * 1. Takes the raw encrypted AES-256 string from CameraX / ML Kit.
  * 2. Decrypts it using [CryptoManager].
- * 3. Parses the decrypted JSON to extract the Admin's minified Firebase configuration (`fbConfig`),
+ * 3. Parses the decrypted JSON to extract the House Admin's minified Firebase configuration (`fbConfig`),
  *    permitted camera IDs, permission level, and expiration timestamp.
  * 4. Checks if the token has expired.
- * 5. Reconstructs and persists the Admin's Firebase JSON in [SettingsRepository].
- * 6. Mounts the Admin's secondary FirebaseApp instance ("admin_cam_app") dynamically
+ * 5. Mounts the House Admin's secondary FirebaseApp instance dynamically with ConfigSource.GUEST_QR
  *    so the guest can query the Admin's Firestore database without needing Keystore SHA-1.
+ * 6. If the user is already authenticated with Google, silently syncs their profile document
+ *    into the House Admin's Firestore under /users/{memberUid} with role "guest".
  */
 class ProcessScannedQrUseCase @Inject constructor(
     private val cryptoManager: CryptoManager,
     private val settingsRepository: SettingsRepository,
-    private val firebaseModule: FirebaseModule
+    private val firebaseModule: FirebaseModule,
+    private val authRepository: AuthRepository? = null
 ) {
+
+    private val tag = "ProcessScannedQrUseCase"
 
     suspend operator fun invoke(encryptedQrPayload: String): Result<ShareToken> = withContext(Dispatchers.IO) {
         try {
@@ -65,7 +72,7 @@ class ProcessScannedQrUseCase @Inject constructor(
                 }
             }
 
-            // 5. Extract and mount the Admin's Firebase configuration
+            // 5. Extract and mount the House Admin's Firebase configuration with GUEST_QR origin tag
             val finalFirebaseJson: String? = when {
                 // Version 2: Minified 4-key config object
                 rootJson.has("fbConfig") -> {
@@ -76,7 +83,16 @@ class ProcessScannedQrUseCase @Inject constructor(
                     val storageBucket = fbObj.optString("b", "")
 
                     if (projectId.isNotBlank() && apiKey.isNotBlank() && appId.isNotBlank()) {
-                        // Reconstruct standard schema expected by FirebaseModule
+                        // Directly initialize secondary FirebaseApp with GUEST_QR origin
+                        firebaseModule.initializeFromCredentials(
+                            projectId = projectId,
+                            apiKey = apiKey,
+                            applicationId = appId,
+                            storageBucket = storageBucket.ifBlank { null },
+                            source = ConfigSource.GUEST_QR
+                        )
+
+                        // Reconstruct standard schema for SettingsRepository persistence
                         JSONObject().apply {
                             put("project_info", JSONObject().apply {
                                 put("project_id", projectId)
@@ -103,20 +119,34 @@ class ProcessScannedQrUseCase @Inject constructor(
                 }
                 // Version 1 fallback: Raw JSON string
                 rootJson.has("firebaseConfig") -> {
-                    rootJson.optString("firebaseConfig", "")
+                    val rawConfig = rootJson.optString("firebaseConfig", "")
+                    if (rawConfig.isNotBlank()) {
+                        firebaseModule.initializeCustomFirebase(rawConfig, ConfigSource.GUEST_QR)
+                    }
+                    rawConfig
                 }
                 else -> null
             }
 
             if (!finalFirebaseJson.isNullOrBlank()) {
-                // Save config to encrypted persistent storage
                 settingsRepository.saveCustomFirebaseJson(finalFirebaseJson)
-
-                // Dynamically initialize the Admin's named secondary FirebaseApp instance
-                firebaseModule.initializeCustomFirebase(finalFirebaseJson)
+                Log.d(tag, "Successfully mounted House Admin Firebase from QR for member session")
             }
 
-            // 6. Construct the validated ShareToken model
+            // 6. If the user is already signed in with Google, silently sync their profile to Admin's Firestore
+            authRepository?.let { repo ->
+                val activeUser = repo.currentUser.value
+                if (activeUser != null && activeUser.email.isNotBlank() && activeUser.email != "guest@shared.home") {
+                    repo.bridgeToAdminFirebase(
+                        email = activeUser.email,
+                        googleUid = activeUser.uid,
+                        role = "guest",
+                        displayName = activeUser.displayName
+                    )
+                }
+            }
+
+            // 7. Construct the validated ShareToken model
             val shareToken = ShareToken(
                 token = token,
                 adminUserId = adminUserId,
@@ -127,11 +157,12 @@ class ProcessScannedQrUseCase @Inject constructor(
                 createdAt = rootJson.optLong("createdAt", currentTime)
             )
 
-            // 7. Save current guest session
+            // 8. Save current guest session
             settingsRepository.saveActiveGuestShareToken(token)
 
             Result.success(shareToken)
         } catch (e: Exception) {
+            Log.e(tag, "Failed to process scanned QR code", e)
             Result.failure(e)
         }
     }
