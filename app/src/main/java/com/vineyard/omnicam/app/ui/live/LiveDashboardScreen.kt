@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,8 +49,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.vineyard.omnicam.app.core.theme.CyanAccent
 import com.vineyard.omnicam.app.data.models.CameraEntity
 import com.vineyard.omnicam.app.ui.components.CameraTileView
@@ -69,6 +73,25 @@ fun LiveDashboardScreen(
     val isScanning by viewModel.isScanning.collectAsState()
 
     var homeMenuExpanded by remember { mutableStateOf(false) }
+
+    // Lifecycle observer to immediately pause/detach camera decoders when switching tabs
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isLiveScreenActive by remember { mutableStateOf(true) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> isLiveScreenActive = true
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> isLiveScreenActive = false
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            isLiveScreenActive = false
+        }
+    }
 
     if (focusedCamera != null) {
         CameraFocusView(
@@ -96,6 +119,7 @@ fun LiveDashboardScreen(
     Scaffold(
         modifier = modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding(),
         floatingActionButton = {
             FloatingActionButton(
@@ -113,6 +137,7 @@ fun LiveDashboardScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
                 .padding(paddingValues)
         ) {
             // Top App Bar with Multi-Home Switcher and Layout Mode Toggles
@@ -203,9 +228,16 @@ fun LiveDashboardScreen(
                 }
             }
 
-            // Camera Stream Layout Rendering
+            // Camera Stream Layout Rendering (Only active when screen is in foreground)
             if (cameras.isEmpty()) {
                 EmptyCamerasView(onAddClick = { viewModel.openAddCameraSheet() })
+            } else if (!isLiveScreenActive) {
+                // Solid placeholder while in background or transitioning, preventing CPU choke and surface ghosting
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                )
             } else {
                 when (layoutMode) {
                     DashboardLayoutMode.QUAD_2X2 -> {
@@ -216,6 +248,7 @@ fun LiveDashboardScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier
                                 .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
                                 .testTag("grid_2x2_container")
                         ) {
                             items(cameras, key = { it.id }) { cam ->
@@ -236,6 +269,7 @@ fun LiveDashboardScreen(
                             verticalArrangement = Arrangement.spacedBy(16.dp),
                             modifier = Modifier
                                 .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
                                 .testTag("grid_single_container")
                         ) {
                             items(cameras, key = { it.id }) { cam ->
@@ -256,6 +290,7 @@ fun LiveDashboardScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier
                                 .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
                                 .testTag("grid_list_container")
                         ) {
                             items(cameras, key = { it.id }) { cam ->
