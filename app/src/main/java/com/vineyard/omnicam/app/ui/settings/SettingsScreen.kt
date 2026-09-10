@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddLink
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Cloud
@@ -28,10 +29,12 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,8 +70,10 @@ import com.vineyard.omnicam.app.core.theme.CyanAccent
 import com.vineyard.omnicam.app.core.theme.EmeraldLive
 import com.vineyard.omnicam.app.core.theme.RoseAlert
 import com.vineyard.omnicam.app.core.theme.ThemeMode
+import com.vineyard.omnicam.app.data.models.UserRole
 import com.vineyard.omnicam.app.data.repository.AuthRepository
 import com.vineyard.omnicam.app.data.repository.SettingsRepository
+import com.vineyard.omnicam.app.ui.components.MemberProfileCard
 import com.vineyard.omnicam.app.ui.landing.ByoFirebaseDialog
 import java.io.File
 import kotlinx.coroutines.launch
@@ -88,6 +93,12 @@ fun SettingsScreen(
     val maxClipSec by settingsRepository.maxClipDuration.collectAsState(initial = 20)
     val customFirebaseJson by settingsRepository.customFirebaseJson.collectAsState(initial = null)
     val coroutineScope = rememberCoroutineScope()
+
+    val currentUser by (authRepository?.currentUser ?: remember { mutableStateOf(null) }).collectAsState(initial = null)
+    val isDriveConnected by (authRepository?.isDriveConnected ?: remember { mutableStateOf(false) }).collectAsState(initial = false)
+
+    val userRole = UserRole.fromString(currentUser?.role)
+    val isAdmin = userRole == UserRole.ADMIN
 
     var crashReports by remember { mutableStateOf(OmniCrashHandler.getCrashReports()) }
     var selectedReportContent by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -120,8 +131,8 @@ fun SettingsScreen(
         }
     }
 
-    // BYO Firebase Dialog
-    if (showByoDialog) {
+    // BYO Firebase Dialog (Admin only)
+    if (showByoDialog && isAdmin) {
         ByoFirebaseDialog(
             onDismiss = { showByoDialog = false },
             onSaveJson = { json ->
@@ -133,14 +144,18 @@ fun SettingsScreen(
         )
     }
 
-    // Sign Out Confirmation Dialog (Completely wipes session, tokens, and custom Firebase JSON)
+    // Sign Out Confirmation Dialog
     if (showSignOutConfirm) {
         AlertDialog(
             onDismissRequest = { showSignOutConfirm = false },
             title = { Text("Sign Out & Switch Home?", color = MaterialTheme.colorScheme.onSurface) },
             text = {
                 Text(
-                    text = "This will sign you out, erase the active custom Firebase JSON configuration, clear temporary access tokens, and reset the app to the onboarding landing page.",
+                    text = if (isAdmin) {
+                        "This will sign you out as House Admin, erase the active custom Firebase JSON configuration, clear temporary access tokens, and reset the app to the onboarding landing page."
+                    } else {
+                        "This will sign out your House Member session, disconnect temporary access grants, and return to the onboarding landing page."
+                    },
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
@@ -149,13 +164,11 @@ fun SettingsScreen(
                     onClick = {
                         showSignOutConfirm = false
                         coroutineScope.launch {
-                            // Completely erase the uploaded JSON configuration
-                            settingsRepository.clearCustomFirebaseJson()
-                            // Clear guest share tokens
+                            if (isAdmin) {
+                                settingsRepository.clearCustomFirebaseJson()
+                            }
                             settingsRepository.saveActiveGuestShareToken("")
-                            // Sign out of Central and Admin Firebase instances
                             authRepository?.signOut()
-                            // Navigate immediately to Landing screen
                             onNavigateToLanding?.invoke()
                         }
                     },
@@ -250,9 +263,97 @@ fun SettingsScreen(
             color = CyanAccent
         )
 
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // SECTION: MEMBER / ADMIN IDENTITY PROFILE CARD
+        currentUser?.let { profile ->
+            MemberProfileCard(userProfile = profile)
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // SECTION: GOOGLE DRIVE CLOUD STORAGE INTEGRATION
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(18.dp)),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(if (isDriveConnected) EmeraldLive.copy(alpha = 0.15f) else CyanAccent.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (isDriveConnected) Icons.Default.CloudDone else Icons.Default.Cloud,
+                                contentDescription = null,
+                                tint = if (isDriveConnected) EmeraldLive else CyanAccent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Google Drive (15 GB Free)",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isDriveConnected) "Active • Browser PKCE Authorized" else "Disconnected • No cloud backup",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isDriveConnected) EmeraldLive else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Encrypted motion event clips are backed up directly to your personal Google Drive storage without recurring monthly subscriptions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (isDriveConnected) {
+                    OutlinedButton(
+                        onClick = { authRepository?.disconnectDrive() },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseAlert),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RoseAlert),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.LinkOff, contentDescription = null, tint = RoseAlert, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Disconnect Google Drive", color = RoseAlert, style = MaterialTheme.typography.labelMedium)
+                    }
+                } else {
+                    Button(
+                        onClick = { authRepository?.initiateGoogleDriveOAuth() },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.AddLink, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Connect Google Drive via Browser", color = Color.Black, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
-        // SECTION: HOUSE ADMIN FIREBASE SETUP
+        // SECTION: HOUSE FIREBASE CONFIGURATION (ROLE-SCOPED)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -285,12 +386,12 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "House Admin Firebase",
+                                text = if (isAdmin) "House Admin Firebase" else "House Network Hub",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (configuredProjectId != null) "Project: $configuredProjectId" else "Not Configured (Default)",
+                                text = if (configuredProjectId != null) "Project: $configuredProjectId" else "Default Network",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (configuredProjectId != null) EmeraldLive else AmberWarning
                             )
@@ -301,51 +402,58 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = if (configuredProjectId != null) {
-                        "Your custom google-services.json is active. Generated member QR codes will automatically bundle these credentials."
+                    text = if (isAdmin) {
+                        if (configuredProjectId != null) {
+                            "Your custom google-services.json is active. Generated member QR codes will automatically bundle these credentials."
+                        } else {
+                            "Upload your private google-services.json so generated QR codes can link family members to your database."
+                        }
                     } else {
-                        "Upload your private google-services.json so generated QR codes can link family members to your database."
+                        "You are connected to the House Admin's private hub as a House Member. Database access rules and camera permissions are managed by the House Admin."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                // Administrative controls are ONLY visible to the House Admin
+                if (isAdmin) {
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { showByoDialog = true },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("btn_manage_byo_firebase"),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (configuredProjectId != null) "Update JSON" else "Upload JSON",
-                            color = Color.Black,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-
-                    if (configuredProjectId != null) {
-                        OutlinedButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    settingsRepository.clearCustomFirebaseJson()
-                                    actionStatusMessage = "Custom Firebase configuration cleared."
-                                }
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseAlert),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RoseAlert)
+                        Button(
+                            onClick = { showByoDialog = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("btn_manage_byo_firebase"),
+                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent)
                         ) {
-                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = RoseAlert, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Reset", color = RoseAlert, style = MaterialTheme.typography.labelMedium)
+                            Icon(Icons.Default.UploadFile, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (configuredProjectId != null) "Update JSON" else "Upload JSON",
+                                color = Color.Black,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+
+                        if (configuredProjectId != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        settingsRepository.clearCustomFirebaseJson()
+                                        actionStatusMessage = "Custom Firebase configuration cleared."
+                                    }
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseAlert),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RoseAlert)
+                            ) {
+                                Icon(Icons.Default.DeleteForever, contentDescription = null, tint = RoseAlert, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Reset", color = RoseAlert, style = MaterialTheme.typography.labelMedium)
+                            }
                         }
                     }
                 }
