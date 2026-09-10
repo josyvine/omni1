@@ -72,7 +72,7 @@ fun MemberProfileCard(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertment ?: Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 // User Avatar or Fallback Initials
                 Box(
