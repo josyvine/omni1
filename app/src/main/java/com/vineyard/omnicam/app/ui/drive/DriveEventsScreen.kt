@@ -19,11 +19,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAlert
 import androidx.compose.material.icons.filled.AddLink
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DirectionsWalk
@@ -31,7 +34,7 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayCircleFilled
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -39,21 +42,30 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.vineyard.omnicam.app.core.theme.AmberWarning
@@ -88,6 +100,9 @@ fun DriveEventsScreen(
     val userRole = UserRole.fromString(currentUser?.role)
     val isAdmin = userRole == UserRole.ADMIN
 
+    // Header navigation tab index (0 = Cloud Storage, 1 = Camera Recordings)
+    var selectedTab by remember { mutableIntStateOf(1) }
+
     activePlayerEvent?.let { event ->
         DriveVideoPlayerDialog(
             event = event,
@@ -101,24 +116,24 @@ fun DriveEventsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
-            .padding(horizontal = 16.dp)
     ) {
-        // Header
+        // TOP HEADER: Compact Title and Action
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
                 Text(
-                    text = "Cloud Recordings",
-                    style = MaterialTheme.typography.headlineSmall,
+                    text = "Drive Cloud",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
-                    text = "Anti-Theft Backup • Google Drive",
+                    text = "Zero-Cost 15 GB Cloud Storage",
                     style = MaterialTheme.typography.bodySmall,
                     color = CyanAccent
                 )
@@ -136,187 +151,273 @@ fun DriveEventsScreen(
             }
         }
 
-        // GOOGLE DRIVE CONNECTION STATUS CARD
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .border(
-                    1.dp,
-                    if (isDriveConnected) EmeraldLive.copy(alpha = 0.4f) else CyanAccent.copy(alpha = 0.3f),
-                    RoundedCornerShape(16.dp)
+        // FASTGIT-STYLE TOP TABBED NAVIGATION (2 Tabs)
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = MaterialTheme.colorScheme.background,
+            contentColor = CyanAccent,
+            indicator = { tabPositions ->
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                    color = CyanAccent,
+                    height = 2.5.dp
                 )
-                .testTag("card_drive_auth_status"),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            },
+            divider = {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            }
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                icon = {
+                    Icon(
+                        imageVector = if (isDriveConnected) Icons.Default.CloudDone else Icons.Default.Cloud,
+                        contentDescription = "Storage",
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
+                text = { Text("Storage") },
+                selectedContentColor = CyanAccent,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Videocam,
+                        contentDescription = "Recordings",
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
+                text = { Text("Recordings") },
+                selectedContentColor = CyanAccent,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // TABBED CONTENT
+        when (selectedTab) {
+            // TAB 0: GOOGLE DRIVE CONNECTION & STORAGE QUOTA METER
+            0 -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .border(
+                                1.dp,
+                                if (isDriveConnected) EmeraldLive.copy(alpha = 0.4f) else CyanAccent.copy(alpha = 0.3f),
+                                RoundedCornerShape(18.dp)
+                            )
+                            .testTag("card_drive_auth_status"),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(if (isDriveConnected) EmeraldLive.copy(alpha = 0.15f) else CyanAccent.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (isDriveConnected) Icons.Default.CloudDone else Icons.Default.CloudOff,
-                                contentDescription = null,
-                                tint = if (isDriveConnected) EmeraldLive else CyanAccent,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isDriveConnected) EmeraldLive.copy(alpha = 0.15f) else CyanAccent.copy(alpha = 0.15f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isDriveConnected) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                                            contentDescription = null,
+                                            tint = if (isDriveConnected) EmeraldLive else CyanAccent,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
 
-                        Spacer(modifier = Modifier.width(10.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
 
-                        Column {
-                            Text(
-                                text = if (isDriveConnected) "Google Drive Active" else "Google Drive Disconnected",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            val email = currentUser?.email
-                            val statusSubtitle = if (isDriveConnected) {
-                                if (!email.isNullOrBlank()) email else "15 GB Free Tier Active"
-                            } else {
-                                "Connect your 15 GB account for free off-site backup"
+                                    Column {
+                                        Text(
+                                            text = if (isDriveConnected) "Google Drive Active" else "Google Drive Disconnected",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        val email = currentUser?.email
+                                        val statusSubtitle = if (isDriveConnected) {
+                                            if (!email.isNullOrBlank()) email else "15 GB Free Tier Active"
+                                        } else {
+                                            "Connect your 15 GB account for free off-site backup"
+                                        }
+                                        Text(
+                                            text = statusSubtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (isDriveConnected) EmeraldLive else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                if (isDriveConnected) {
+                                    OutlinedButton(
+                                        onClick = { authRepository?.disconnectDrive() },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseAlert),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, RoseAlert),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(36.dp)
+                                    ) {
+                                        Icon(Icons.Default.LinkOff, contentDescription = null, tint = RoseAlert, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Disconnect", color = RoseAlert, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
                             }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
                             Text(
-                                text = statusSubtitle,
+                                text = if (isAdmin) {
+                                    "As House Admin, camera motion recordings upload directly to your personal Google Drive under the /OmniCam folder."
+                                } else {
+                                    "You are logged in as a House Member. Connect your Google account to enable personal backup copies."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (isDriveConnected) EmeraldLive else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+
+                            if (!isDriveConnected) {
+                                Spacer(modifier = Modifier.height(14.dp))
+
+                                Button(
+                                    onClick = { authRepository?.initiateGoogleDriveOAuth() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(46.dp),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.Default.AddLink, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Connect Google Drive (15 GB Free)",
+                                        color = Color.Black,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    if (isDriveConnected) {
-                        OutlinedButton(
-                            onClick = { authRepository?.disconnectDrive() },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseAlert),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RoseAlert),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Icon(Icons.Default.LinkOff, contentDescription = null, tint = RoseAlert, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Disconnect", color = RoseAlert, style = MaterialTheme.typography.labelSmall)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Storage Progress Bar Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(18.dp)),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Google Drive Anti-Theft Storage",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            StorageProgressBar(
+                                usedBytes = storageUsed,
+                                totalBytes = viewModel.totalStorageBytes
+                            )
                         }
                     }
                 }
+            }
 
-                if (!isDriveConnected) {
+            // TAB 1: FULL-SCREEN MOTION RECORDINGS & CAMERA CLIPS
+            1 -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp)
+                ) {
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Text(
-                        text = if (isAdmin) {
-                            "As House Admin, camera motion recordings upload directly to your Google Drive under the /OmniCam folder."
-                        } else {
-                            "You are logged in as a House Member. Connect your Google account to enable personal backup copies."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    // Camera Filter Chips
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedCameraId == null,
+                                onClick = { viewModel.selectCameraFilter(null) },
+                                label = { Text("All Cameras") },
+                                leadingIcon = { Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = CyanAccent,
+                                    selectedLabelColor = Color.Black
+                                ),
+                                modifier = Modifier.testTag("filter_chip_all")
+                            )
+                        }
+                        items(cameras) { cam ->
+                            FilterChip(
+                                selected = selectedCameraId == cam.id,
+                                onClick = { viewModel.selectCameraFilter(cam.id) },
+                                label = { Text(cam.name) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = CyanAccent,
+                                    selectedLabelColor = Color.Black
+                                ),
+                                modifier = Modifier.testTag("filter_chip_${cam.id}")
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Button(
-                        onClick = { authRepository?.initiateGoogleDriveOAuth() },
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.AddLink, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Connect Google Drive (15 GB Free)",
-                            color = Color.Black,
-                            style = MaterialTheme.typography.labelMedium
-                        )
+                    // Full-Display Chronological Recording Events
+                    if (events.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No motion events recorded yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(bottom = 80.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("drive_events_list")
+                        ) {
+                            items(events, key = { it.id }) { event ->
+                                DriveEventCard(
+                                    event = event,
+                                    onClick = { viewModel.openPlayer(event) }
+                                )
+                            }
+                        }
                     }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Google Drive Storage Meter
-        StorageProgressBar(
-            usedBytes = storageUsed,
-            totalBytes = viewModel.totalStorageBytes
-        )
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Camera Filter Chips
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            item {
-                FilterChip(
-                    selected = selectedCameraId == null,
-                    onClick = { viewModel.selectCameraFilter(null) },
-                    label = { Text("All Cameras") },
-                    leadingIcon = { Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = CyanAccent,
-                        selectedLabelColor = Color.Black
-                    ),
-                    modifier = Modifier.testTag("filter_chip_all")
-                )
-            }
-            items(cameras) { cam ->
-                FilterChip(
-                    selected = selectedCameraId == cam.id,
-                    onClick = { viewModel.selectCameraFilter(cam.id) },
-                    label = { Text(cam.name) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = CyanAccent,
-                        selectedLabelColor = Color.Black
-                    ),
-                    modifier = Modifier.testTag("filter_chip_${cam.id}")
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Chronological Recording Events
-        if (events.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "No motion events recorded yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(bottom = 80.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("drive_events_list")
-            ) {
-                items(events, key = { it.id }) { event ->
-                    DriveEventCard(
-                        event = event,
-                        onClick = { viewModel.openPlayer(event) }
-                    )
                 }
             }
         }
